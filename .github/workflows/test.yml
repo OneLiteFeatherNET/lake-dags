@@ -31,10 +31,10 @@ jobs:
       - name: Install Airflow with constraints
         run: |
           curl -fsSL -o "$RUNNER_TEMP/constraints-3.12.txt" \
-            https://raw.githubusercontent.com/apache/airflow/constraints-3.2.2/constraints-3.12.txt
+            https://raw.githubusercontent.com/apache/airflow/constraints-3.3.2/constraints-3.12.txt
           uv pip install --python .venv/bin/python \
             --constraint "$RUNNER_TEMP/constraints-3.12.txt" \
-            "apache-airflow==3.2.2" "apache-airflow-providers-cncf-kubernetes==10.17.1"
+            "apache-airflow==3.3.2" "apache-airflow-providers-cncf-kubernetes==10.22.0"
 
       - name: Test
         # --no-sync keeps the Airflow packages installed above.
