@@ -1,6 +1,6 @@
 # lake-dags
 
-Apache Airflow 3.2.2 DAGs for the OneLiteFeather data lake.
+Apache Airflow 3.3.2 DAGs for the OneLiteFeather data lake.
 
 ## Layout
 
