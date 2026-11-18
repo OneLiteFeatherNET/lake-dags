@@ -1,0 +1,43 @@
+name: Test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: astral-sh/setup-uv@v6
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dev dependencies
+        run: uv sync --group dev
+
+      - name: Lint
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+
+      - name: Install Airflow with constraints
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/constraints-3.12.txt" \
+            https://raw.githubusercontent.com/apache/airflow/constraints-3.3.2/constraints-3.12.txt
+          uv pip install --python .venv/bin/python \
+            --constraint "$RUNNER_TEMP/constraints-3.12.txt" \
+            "apache-airflow==3.3.2" "apache-airflow-providers-cncf-kubernetes==10.22.0"
+
+      - name: Test
+        # --no-sync keeps the Airflow packages installed above.
+        env:
+          AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+        run: uv run --no-sync pytest

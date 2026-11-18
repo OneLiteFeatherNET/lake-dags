@@ -1,0 +1,41 @@
+[project]
+name = "lake-dags"
+version = "0.1.0"
+description = "Apache Airflow DAGs for the OneLiteFeather data lake"
+license = "Apache-2.0"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.optional-dependencies]
+# CI installs these with the Airflow constraints file (see .github/workflows/test.yml).
+airflow = [
+    "apache-airflow==3.3.2",
+    "apache-airflow-providers-cncf-kubernetes==10.22.0",
+    "kubernetes==36.0.3",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "ruff",
+    "pyyaml",
+]
+
+[tool.uv]
+# Not an installable package: the DAG folder is put on the path instead.
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["dags"]
+testpaths = ["tests"]
+markers = ["airflow: needs Apache Airflow installed (CI only)"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["lake"]
