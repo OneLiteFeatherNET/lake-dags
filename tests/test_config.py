@@ -26,7 +26,7 @@ def test_real_maintenance_yaml_loads_with_expected_tables():
     assert config.snapshot_max_age_days == 7
     assert config.spark.spark_version == "4.1.4"
     assert config.tables == [
-        TableConfig(name="capture.raw", retention_days=21, day_column="date"),
+        TableConfig(name="capture.raw", retention_days=None, day_column="date"),
         TableConfig(name="capture.events", retention_days=None, day_column="date"),
     ]
 
