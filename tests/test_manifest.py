@@ -53,6 +53,20 @@ def test_spark_version_and_image_come_from_config():
     assert image.endswith(":4.1.4-scala2.13-java17-python3-ubuntu")
 
 
+def test_container_image_is_set_in_spark_conf_for_the_operator():
+    app = _app()
+    image = load_config().spark.image
+
+    assert app["spec"]["sparkConf"]["spark.kubernetes.container.image"] == image
+
+
+def test_pod_templates_name_the_containers_spark_should_use():
+    conf = _app()["spec"]["sparkConf"]
+
+    assert conf["spark.kubernetes.driver.podTemplateContainerName"] == "spark-driver"
+    assert conf["spark.kubernetes.executor.podTemplateContainerName"] == "spark-executor"
+
+
 def test_packages_string_contains_both_maven_coordinates():
     packages = _app()["spec"]["sparkConf"]["spark.jars.packages"]
 
@@ -121,10 +135,19 @@ def test_configmap_is_mounted_read_only_at_job_path_for_driver_and_executor():
         assert volume["configMap"]["name"] == NAME
 
 
-def test_driver_runs_as_spark_service_account_with_resources():
+def test_driver_service_account_is_set_in_spark_conf_not_pod_template():
+    app = _app()
+    driver = app["spec"]["driverSpec"]["podTemplateSpec"]["spec"]
+
+    assert app["spec"]["sparkConf"]["spark.kubernetes.authenticate.driver.serviceAccountName"] == (
+        "spark"
+    )
+    assert "serviceAccountName" not in driver
+
+
+def test_driver_container_has_resource_limits():
     driver = _app()["spec"]["driverSpec"]["podTemplateSpec"]["spec"]
 
-    assert driver["serviceAccountName"] == "spark"
     assert driver["containers"][0]["resources"]["limits"] == {"cpu": "1", "memory": "2Gi"}
 
 
@@ -132,7 +155,7 @@ def test_py_file_points_at_mounted_job_and_args_are_catalog_table_statements():
     statements = ["CALL corvus.system.rewrite_data_files('capture.raw')"]
     spec = _app(statements)["spec"]
 
-    assert spec["pyFiles"] == f"/opt/lake/job/{JOB_FILE_NAME}"
+    assert spec["pyFiles"] == f"local:///opt/lake/job/{JOB_FILE_NAME}"
     assert spec["driverArgs"] == ["corvus", "capture.raw", json.dumps(statements)]
 
 
