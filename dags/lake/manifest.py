@@ -14,7 +14,7 @@ JOB_MOUNT_PATH = "/opt/lake/job"
 JOB_FILE_NAME = "maintenance_job.py"
 JOB_FILE_PATH = f"{JOB_MOUNT_PATH}/{JOB_FILE_NAME}"
 JOB_SOURCE_PATH = Path(__file__).resolve().parent / "spark" / JOB_FILE_NAME
-DRIVER_SERVICE_ACCOUNT = "spark"
+DRIVER_SERVICE_ACCOUNT = "spark"  # chart workloadResources.serviceAccount.name
 OAUTH_SECRET = "lake-maintenance-oauth"
 S3_SECRET = "polaris-corvus"
 POLARIS_URI = "http://polaris.data.svc:8181/api/catalog"
@@ -28,8 +28,8 @@ S3_REGION = "us-east-1"
 SPARK_EXTENSIONS = "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions"
 SPARK_CATALOG_CLASS = "org.apache.iceberg.spark.SparkCatalog"
 JOB_VOLUME = "maintenance-job"
-DRIVER_CONTAINER = "spark-driver"  # unverified against operator 1.9.0
-EXECUTOR_CONTAINER = "spark-executor"  # unverified against operator 1.9.0
+DRIVER_CONTAINER = "spark-driver"
+EXECUTOR_CONTAINER = "spark-executor"
 _INVALID_LABEL_CHARS = re.compile(r"[^a-z0-9-]+")
 _MAX_LABEL = 63
 
@@ -78,7 +78,7 @@ def build_spark_application(
         "metadata": {"name": name, "namespace": namespace, "labels": dict(labels)},
         "spec": {
             "runtimeVersions": {"sparkVersion": settings.spark_version},
-            "pyFiles": JOB_FILE_PATH,
+            "pyFiles": f"local://{JOB_FILE_PATH}",
             "driverArgs": [catalog, table_fqn, statements_json],
             "sparkConf": _spark_conf(catalog, settings),
             "driverSpec": {
@@ -87,7 +87,6 @@ def build_spark_application(
                     config_map_name,
                     DRIVER_CONTAINER,
                     with_oauth=True,
-                    service_account=True,
                 )
             },
             "executorSpec": {
@@ -96,7 +95,6 @@ def build_spark_application(
                     config_map_name,
                     EXECUTOR_CONTAINER,
                     with_oauth=False,
-                    service_account=False,
                 )
             },
             "applicationTolerations": {
@@ -114,6 +112,11 @@ def build_spark_application(
 def _spark_conf(catalog: str, settings: SparkSettings) -> dict[str, str]:
     prefix = f"spark.sql.catalog.{catalog}"
     return {
+        # The Apache operator takes the image only from Spark conf; the v1 CRD has no image field.
+        "spark.kubernetes.container.image": settings.image,
+        "spark.kubernetes.authenticate.driver.serviceAccountName": DRIVER_SERVICE_ACCOUNT,
+        "spark.kubernetes.driver.podTemplateContainerName": DRIVER_CONTAINER,
+        "spark.kubernetes.executor.podTemplateContainerName": EXECUTOR_CONTAINER,
         "spark.jars.packages": f"{settings.iceberg_runtime},{settings.iceberg_aws_bundle}",
         "spark.sql.extensions": SPARK_EXTENSIONS,
         prefix: SPARK_CATALOG_CLASS,
@@ -136,7 +139,6 @@ def _pod_template(
     container_name: str,
     *,
     with_oauth: bool,
-    service_account: bool,
 ) -> dict[str, Any]:
     env = [
         _secret_env("AWS_ACCESS_KEY_ID", S3_SECRET, "AWS_ACCESS_KEY_ID"),
@@ -163,8 +165,6 @@ def _pod_template(
         ],
         "volumes": [{"name": JOB_VOLUME, "configMap": {"name": config_map_name}}],
     }
-    if service_account:
-        spec["serviceAccountName"] = DRIVER_SERVICE_ACCOUNT
     return {"spec": spec}
 
 
