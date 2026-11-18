@@ -1,0 +1,50 @@
+schema: spec-driven
+
+context: |
+  Apache Airflow 3.3.2 DAGs and PySpark jobs for the OneLiteFeather data lake.
+  The DAGs run on the feather-core Kubernetes cluster: Airflow (KubernetesExecutor,
+  git-sync from branch main, subPath dags) starts SparkApplications (Spark 4.1,
+  Apache Iceberg 1.12 runtime) in namespace data. Iceberg tables live in the
+  Apache Polaris REST catalog `corvus` on Ceph RGW bucket `polaris-corvus`
+  (no STS, static keys). Polaris authenticates with Entra ID client credentials.
+  Platform changes (Polaris namespaces and grants, Entra app roles, Airflow pools)
+  live in the Kubernetes-FLUX repository and are referenced as dependencies, never
+  implemented here.
+  Data: Corvus (Minecraft anti-cheat) writes capture.raw, the complete plaintext
+  packet capture of both directions, kept permanently, and capture.events, a derived
+  table. Both carry a pseudonymous player_key (HMAC of the player UUID; the key is
+  not in the lake). Delivery is at least once, so duplicates on (session_id,
+  direction, seq) are expected. Volume: up to about 10 players per day, 1 to 4 hours
+  each, so 1.4 to 14 million packets and 1 to 15 GB per day.
+  The lake is the source of truth for analysis; layers are refined (silver), features
+  (gold), labels and reference data. Trino is read-only for people; all writes are
+  Spark jobs started by Airflow.
+  Canonical concept: the maintainer's research document (Minecraft-Paket-Lakehouse).
+  Where this change deviates from it, design.md says so and why.
+  The DAG code repository is public: no host names, secrets or credentials in code
+  or in change documents.
+  Documentation for operators lives in Outline (collection Infrastruktur), not in docs/.
+  Commits and PR titles follow Conventional Commits. Release-Please reads the types
+  listed in release-please-config.json.
+  Prefer established terms from the Semantic Anchors catalog
+  (https://llm-coding.github.io/Semantic-Anchors/) over long paraphrases.
+
+rules:
+  proposal:
+    - "Open BLUF style: state what changes and why in the first sentences, then the current state and details."
+    - Name the Conventional Commits type and scope the change ships under (feat(dags) for lake-dags code).
+    - A change that mixes types is split into two changes.
+    - Name the dependencies that live in Kubernetes-FLUX, and do not implement them in this repository.
+  specs:
+    - Write requirements in EARS syntax.
+    - Write scenarios as Given/When/Then.
+    - Never put session ids, player keys or chat or name payloads into examples or scenario data.
+  design:
+    - Record alternatives and the decision MADR-style (options, decision drivers, consequences).
+    - Open questions are listed explicitly and are not decided silently.
+    - Note every deviation from the concept document and its reason.
+  tasks:
+    - Tasks are unchecked when the change is proposed. Checkboxes are ticked in a follow-up PR, never in the code PR.
+    - The last task opens the pull request under the Conventional Commits title from the proposal.
+    - Tests are written before the production code they cover (red, green, refactor).
+    - 'Archive commit message: "docs(openspec): archive <change-name>" unless archived together with the implementation.'
