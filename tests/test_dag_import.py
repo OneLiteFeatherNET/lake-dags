@@ -20,7 +20,7 @@ def dag_bag(tmp_path_factory):
         patch.setenv("AIRFLOW__CORE__LOAD_EXAMPLES", "False")
         from airflow.models import DagBag
 
-        yield DagBag(dag_folder=str(REPO_ROOT / "dags"), include_examples=False)
+        yield DagBag(dag_folder=str(REPO_ROOT / "dags"))
 
 
 def test_dag_folder_imports_without_errors(dag_bag):
