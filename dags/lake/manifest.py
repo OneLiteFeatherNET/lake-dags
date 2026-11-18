@@ -10,6 +10,7 @@ from lake.config import SparkSettings
 
 NAMESPACE = "data"
 SPARK_API_VERSION = "spark.apache.org/v1"
+IVY_DIR = "/tmp/.ivy2"
 JOB_MOUNT_PATH = "/opt/lake/job"
 JOB_FILE_NAME = "maintenance_job.py"
 JOB_FILE_PATH = f"{JOB_MOUNT_PATH}/{JOB_FILE_NAME}"
@@ -118,6 +119,9 @@ def _spark_conf(catalog: str, settings: SparkSettings) -> dict[str, str]:
         "spark.kubernetes.driver.podTemplateContainerName": DRIVER_CONTAINER,
         "spark.kubernetes.executor.podTemplateContainerName": EXECUTOR_CONTAINER,
         "spark.jars.packages": f"{settings.iceberg_runtime},{settings.iceberg_aws_bundle}",
+        # The image runs as user spark with HOME=/nonexistent; Ivy would put its cache there and
+        # spark-submit fails with FileNotFoundException before the job starts.
+        "spark.jars.ivy": IVY_DIR,
         "spark.sql.extensions": SPARK_EXTENSIONS,
         prefix: SPARK_CATALOG_CLASS,
         f"{prefix}.type": "rest",
