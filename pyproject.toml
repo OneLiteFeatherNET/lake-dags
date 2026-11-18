@@ -10,7 +10,7 @@ dependencies = []
 # CI installs these with the Airflow constraints file (see .github/workflows/test.yml).
 airflow = [
     "apache-airflow==3.4.0",
-    "apache-airflow-providers-cncf-kubernetes==10.25.0",
+    "apache-airflow-providers-cncf-kubernetes==11.0.0",
     "kubernetes==36.0.3",
 ]
 
