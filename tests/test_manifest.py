@@ -60,6 +60,14 @@ def test_container_image_is_set_in_spark_conf_for_the_operator():
     assert app["spec"]["sparkConf"]["spark.kubernetes.container.image"] == image
 
 
+def test_ivy_cache_points_at_a_writable_directory():
+    conf = _app()["spec"]["sparkConf"]
+
+    assert conf["spark.jars.ivy"].startswith("/tmp/"), (
+        "the image's HOME (/nonexistent) is not writable"
+    )
+
+
 def test_pod_templates_name_the_containers_spark_should_use():
     conf = _app()["spec"]["sparkConf"]
 
