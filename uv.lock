@@ -346,7 +346,7 @@ wheels = [
 
 [[package]]
 name = "apache-airflow-providers-cncf-kubernetes"
-version = "10.22.0"
+version = "10.25.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiofiles" },
@@ -358,9 +358,9 @@ dependencies = [
     { name = "kubernetes-asyncio" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/93/82/4c7f7db194134ac16dc0d0504b1c0cca1c931a72ffa1154ee7d06231ab2b/apache_airflow_providers_cncf_kubernetes-10.22.0.tar.gz", hash = "sha256:39adf65777563f7b49feb5546adb868028a957945128eac3274ceafacd6c7164", size = 524878, upload-time = "2026-09-14T14:48:01.663Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ef/1e/c3aca665583483cf86c7a5d80f2fe436257846751ba02427d6a9d7fce422/apache_airflow_providers_cncf_kubernetes-10.25.0.tar.gz", hash = "sha256:134809a37537cedf05cd6d60c51b64cd1df430c29e289786214d33307b27accf", size = 546853, upload-time = "2026-10-24T18:48:42.295Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e8/b9/cd8fb84b11b4ea574d7230c641de4d6cce506ecae3f2b77f5db7d2da6eed/apache_airflow_providers_cncf_kubernetes-10.22.0-py3-none-any.whl", hash = "sha256:23eb172db21103f9b00f999f95c7af1037d230605b03d3de0edcddc49e2e6bd1", size = 194017, upload-time = "2026-09-14T14:47:20.712Z" },
+    { url = "https://files.pythonhosted.org/packages/78/e3/342cf7ca2d35337c2221a13a2084d49714df2880db568e593297235d8bb9/apache_airflow_providers_cncf_kubernetes-10.25.0-py3-none-any.whl", hash = "sha256:6644520fcfec8b16c271602bfe0492848857261a48885e83ae4477e1da662d74", size = 200313, upload-time = "2026-10-24T18:48:11.805Z" },
 ]
 
 [[package]]
@@ -1548,7 +1548,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "apache-airflow", marker = "extra == 'airflow'", specifier = "==3.4.0" },
-    { name = "apache-airflow-providers-cncf-kubernetes", marker = "extra == 'airflow'", specifier = "==10.22.0" },
+    { name = "apache-airflow-providers-cncf-kubernetes", marker = "extra == 'airflow'", specifier = "==10.25.0" },
     { name = "kubernetes", marker = "extra == 'airflow'", specifier = "==36.0.3" },
 ]
 provides-extras = ["airflow"]
