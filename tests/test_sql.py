@@ -35,7 +35,7 @@ def test_build_statements_for_capture_raw_in_order_with_exact_text():
         "CALL corvus.system.expire_snapshots(table => 'capture.raw', "
         "older_than => TIMESTAMP '2026-11-11 03:00:00', retain_last => 1)",
         "CALL corvus.system.remove_orphan_files(table => 'capture.raw', "
-        "older_than => TIMESTAMP '2026-11-15 03:00:00')",
+        "older_than => TIMESTAMP '2026-11-15 03:00:00', prefix_listing => true)",
     ]
 
 
@@ -49,12 +49,22 @@ def test_delete_step_is_absent_when_retention_is_none():
     assert statements[0] == "CALL corvus.system.rewrite_data_files('capture.events')"
 
 
+def test_orphan_cleanup_lists_files_through_table_file_io():
+    # Hadoop FileSystem has no s3 scheme in the image; prefix_listing uses the table's FileIO.
+    table = TableConfig(name="capture.events", retention_days=None)
+
+    statements = build_statements("corvus", table, NOW, snapshot_max_age_days=7)
+
+    assert "remove_orphan_files" in statements[-1]
+    assert "prefix_listing => true" in statements[-1]
+
+
 def test_orphan_cutoff_is_three_days_before_now():
     table = TableConfig(name="capture.events", retention_days=None)
 
     statements = build_statements("corvus", table, NOW, snapshot_max_age_days=7)
 
-    assert "older_than => TIMESTAMP '2026-11-15 03:00:00')" in statements[-1]
+    assert "older_than => TIMESTAMP '2026-11-15 03:00:00'" in statements[-1]
 
 
 def test_snapshot_cutoff_follows_configured_age():
