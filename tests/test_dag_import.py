@@ -56,3 +56,9 @@ def test_iceberg_maintenance_run_settings(dag_bag):
 
     assert dag.catchup is False
     assert dag.max_active_runs == 1
+
+
+def test_iceberg_maintenance_runs_one_table_at_a_time(dag_bag):
+    dag = dag_bag.dags["iceberg_maintenance"]
+
+    assert dag.max_active_tasks == 1

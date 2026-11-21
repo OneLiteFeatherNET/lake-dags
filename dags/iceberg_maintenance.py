@@ -44,6 +44,8 @@ def _maintenance_task(table: TableConfig) -> None:
     start_date=datetime(2026, 1, 1, tzinfo=UTC),
     catchup=False,
     max_active_runs=1,
+    # Cluster memory fits one driver+executor pair at a time; parallel tables stayed Pending.
+    max_active_tasks=1,
     default_args={"retries": 2},
 )
 def iceberg_maintenance() -> None:
