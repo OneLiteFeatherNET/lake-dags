@@ -17,31 +17,37 @@ THE lake jobs SHALL write the tables of the namespaces `refined`, `features`, `l
 - **WHEN** the statements that reference `capture.` are listed
 - **THEN** every such statement is a read (a select)
 
-### Requirement: Silver is built from capture.raw and capture.events
+### Requirement: Silver is built from the Corvus capture tables
 
-THE refined build SHALL read `capture.raw` for packet identity and payload, and `capture.events` for the decoded event fields, joined on (session_id, direction, seq). THE refined build SHALL read no other source table.
+THE refined build SHALL read `capture.raw` for packet identity and payload, and `capture.events` for the decoded event fields, joined on (session_id, seq). THE refined build SHALL read `capture.sessions`, `capture.segments` and `capture.session_ends` for session facts, and SHALL take one row per `session_id` (and `segment`) from them, because redelivery appends duplicates. THE refined build SHALL read no other source table.
 
 #### Scenario: Source tables of the refined build
 
 - **GIVEN** the statements of the refined build for one day
 - **WHEN** their source tables are listed
-- **THEN** the source tables are `capture.raw` and `capture.events` only
-- **AND** the join key is (session_id, direction, seq)
+- **THEN** the source tables are `capture.raw`, `capture.events`, `capture.sessions`, `capture.segments` and `capture.session_ends` only
+- **AND** the packet join key is (session_id, seq)
 
-### Requirement: Duplicates are removed by session, direction and sequence
+#### Scenario: Redelivered session row is read once
 
-WHEN `capture.raw` contains more than one row for the same (session_id, direction, seq), THE refined build SHALL keep exactly one row for that key in `refined.packets`.
+- **GIVEN** two rows of `capture.sessions` for session `s1`, one of them a redelivery
+- **WHEN** the refined build runs
+- **THEN** `refined.sessions` holds exactly one row for `s1`
+
+### Requirement: Duplicates are removed by session and sequence
+
+WHEN `capture.raw` contains more than one row for the same (session_id, seq), THE refined build SHALL keep exactly one row for that key in `refined.packets`.
 
 #### Scenario: Exact duplicate is dropped
 
-- **GIVEN** two identical rows for (session `s1`, S2C, seq `7`) in `capture.raw` for day D
+- **GIVEN** two identical rows for (session `s1`, seq `7`) in `capture.raw` for day D
 - **WHEN** the refined build for day D runs and passes its checks
-- **THEN** `refined.packets` contains exactly one row for (`s1`, S2C, `7`)
+- **THEN** `refined.packets` contains exactly one row for (`s1`, `7`)
 - **AND** the duplicate is counted in the `dup.rate` result
 
 #### Scenario: Conflicting duplicate quarantines the session
 
-- **GIVEN** two rows for (session `s2`, C2S, seq `3`) with different content hashes
+- **GIVEN** two rows for (session `s2`, seq `3`) with different content hashes
 - **WHEN** the refined build for day D runs
 - **THEN** no row of session `s2` is written to `refined.packets`
 - **AND** session `s2` is written to `quality.quarantine_sessions` with check id `dup.conflict`
@@ -129,18 +135,24 @@ THE refined build SHALL record every check result in `quality.check_results`, an
 
 #### Scenario: Missing drop counter is not a failure
 
-- **GIVEN** Corvus writes no dropped-packet counter
+- **GIVEN** session `s11` has no row in `capture.session_ends` (a crashed session)
 - **WHEN** the refined build runs
-- **THEN** `quality.check_results` holds verdict `not_available` for `drops.reported`
+- **THEN** `refined.sessions` holds `not_available` for `drops.reported` of `s11`
 - **AND** `main` is published if the blocking checks pass
 
-### Requirement: Sequence gaps are checked per session and direction
+#### Scenario: Dropped counters are summed per session
 
-THE refined build SHALL compute the missing-sequence ratio for each session and direction, and SHALL quarantine a session in which either direction has a ratio above 1 %.
+- **GIVEN** two rows of `capture.session_ends` for session `s12` with `dropped_queue_full` 3 and 2
+- **WHEN** the refined build runs
+- **THEN** `refined.sessions` holds a dropped total of 5 for `s12`
+
+### Requirement: Sequence gaps are checked per session
+
+THE refined build SHALL compute the missing-sequence ratio for each session over the `seq` values of both directions, and SHALL quarantine a session whose ratio is above 1 %.
 
 #### Scenario: Gap ratio above threshold
 
-- **GIVEN** the C2S direction of session `s3` has a gap ratio of 2 %
+- **GIVEN** session `s3` has a gap ratio of 2 %
 - **WHEN** the refined build runs
 - **THEN** `refined.sessions` holds verdict `quarantined` for `s3`
 - **AND** no row of `s3` is in `refined.packets`
@@ -154,7 +166,7 @@ THE refined build SHALL compute the missing-sequence ratio for each session and 
 
 ### Requirement: Row counts reconcile with capture.raw
 
-THE refined build SHALL verify, as the blocking check `rows.reconcile`, that the distinct (session_id, direction, seq) count of the day in `capture.raw` equals the rows in `refined.packets` plus the `row_count` of the quarantined sessions of that day.
+THE refined build SHALL verify, as the blocking check `rows.reconcile`, that the distinct (session_id, seq) count of the day in `capture.raw` equals the rows in `refined.packets` plus the `row_count` of the quarantined sessions of that day.
 
 #### Scenario: Silent loss is blocked
 
@@ -175,7 +187,7 @@ WHEN the refined build for day D runs again, THE build SHALL overwrite only part
 
 ### Requirement: Reference loads validate and replace
 
-THE reference loader SHALL reject a file with an unknown state or direction, or with duplicate keys, and SHALL replace the rows of the affected protocol versions in one `MERGE`.
+THE reference loader SHALL read the reviewed CSV files in `dags/config/reference/` (packet names, and backend configuration with the anti-xray mode), SHALL reject a file with an unknown state or direction, or with duplicate keys, and SHALL replace the rows of the affected protocol versions in one `MERGE`.
 
 #### Scenario: Invalid reference file is rejected
 
@@ -186,7 +198,7 @@ THE reference loader SHALL reject a file with an unknown state or direction, or 
 
 ### Requirement: Labels are Iceberg tables with a fixed contract
 
-THE label import SHALL write admin, Blackhole and controlled-recording labels into `labels.sessions` and `labels.windows` only, with the fields of design decision 9, and SHALL upsert by `label_id`, keeping the newest `record_version`.
+THE label import SHALL read admin label batches from CSV files and the controlled recordings, SHALL write them into `labels.sessions` and `labels.windows` only, with the fields of design decision 9, and SHALL upsert by `label_id`, keeping the newest `record_version`. Blackhole labels SHALL enter through the source adapter interface, which has no concrete source in v1.
 
 #### Scenario: Newer version replaces older
 
@@ -395,7 +407,7 @@ THE lake erasure SHALL process every request with status `pending` in `quality.e
 
 #### Scenario: Capture not yet empty
 
-- **GIVEN** a pending request for key `pe` while `capture.raw` still holds rows of `pe`
+- **GIVEN** a pending request for key `pe` while any of the five `capture` tables still holds rows of `pe`
 - **WHEN** the hourly erasure run starts
 - **THEN** no downstream row of `pe` is deleted
 - **AND** the request has status `failed_capture_not_empty`

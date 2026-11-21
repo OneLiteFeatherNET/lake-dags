@@ -2,15 +2,36 @@
 
 The lake from `add-data-lake` is deployed: catalog `corvus` on Polaris, bucket `polaris-corvus` on Ceph RGW, and the nightly `iceberg_maintenance` DAG in this repository. Corvus now writes `capture.raw`, the complete plaintext packet capture of both directions, with `player_key` as a pseudonym, and keeps it permanently. It also writes `capture.events`, a derived table, which gets `player_key` too. The maintainer's concept document (Minecraft-Paket-Lakehouse) defines the three tiers: bronze (raw, never changed), silver (decoded, cleaned, sorted per session) and gold (features and token sequences), plus labels and reference data.
 
-Volume: at most 10 players per day, 1 to 4 hours each. That is 1.4 to 14 million packets and 1 to 15 GB per day, mostly server-to-client. Delivery is at least once, so duplicates on (session_id, direction, seq) are expected, and late batches can land in a day that was already read.
+Volume: at most 10 players per day, 1 to 4 hours each. That is 1.4 to 14 million packets and 1 to 15 GB per day, mostly server-to-client. Delivery is at least once, so duplicates on (session_id, seq) are expected, and late batches can land in a day that was already read.
 
 ## Verified facts (repository, 2026-11-18)
 
 - `dags/iceberg_maintenance.py` runs at 03:00 UTC, one SparkApplication per table in `dags/config/maintenance.yaml`, with Spark 4.1.4 and Iceberg 1.12.0. Tables that do not exist are skipped. Retention is per table: `DELETE ... WHERE <day_column> < cutoff`. The current config keeps `capture.raw` 21 days. This change makes it permanent.
 - `dags/lake/spark/maintenance_job.py` is self-contained and must not import the `lake` package. SQL is built by pure Python (`dags/lake/sql.py`).
-- `pyproject.toml` pins `apache-airflow==3.3.2` for CI. The FLUX proposal `add-data-lake` pins chart 1.22.0 (Airflow 3.2.2). The deployed version has to be confirmed (task 1.2).
+- `pyproject.toml` pins `apache-airflow==3.4.0` for CI (checked on origin/main, 2026-11-21; this replaces the 3.3.2 pin noted on 2026-11-18). Kubernetes-FLUX main sets `airflowVersion` 3.4.0 (maintainer, 2026-11-21). The cluster check stays in task 1.2.
 - The `lake_sql` change (Kubernetes-FLUX, `feat(data)`) gives staff read-only Trino access, with the Polaris principal `lake_sql`.
-- The concept document, section "Ingest-Worker", states that the write path is at-least-once and that duplicates are removed in silver over (session_id, direction, seq). The packet fields named there are ts, session_id, seq, player_key, direction, protocol_version, state, packet_id, backend, length, payload and payload_hash. The maintainer's column list for `capture.raw` uses `payload`, `direction`, `state`, `packet_type`, `wire_packet_id`, `protocol_version`, `player_key`, `seq` and `offset_nanos`. The two lists differ; task 1.1 fixes the real schema.
+- The concept document, section "Ingest-Worker", states that the write path is at-least-once and that duplicates are removed in silver over (session_id, direction, seq). This change keys on (session_id, seq) instead, see the deviation below. The packet fields named there are ts, session_id, seq, player_key, direction, protocol_version, state, packet_id, backend, length, payload and payload_hash. The maintainer's column list for `capture.raw` uses `payload`, `direction`, `state`, `packet_type`, `wire_packet_id`, `protocol_version`, `player_key`, `seq` and `offset_nanos`. The two lists differ; the Corvus facts below fix the real schema.
+
+## Verified facts from Corvus origin/main (2026-11-21)
+
+Checked against Corvus origin/main and confirmed by the maintainer. They answer task 1.1 and open questions 1 and 4.
+
+- `capture.raw` columns: `session_id` fixed(16), `segment` int, `seq` long, `offset_nanos` long, `direction` int, `state` int, `packet_type` long, `wire_packet_id` int, `protocol_version` int (nullable), `player_key` fixed(32) (nullable), `payload_original_size` long, `payload` binary (plaintext). Partition identity(`date`), where `date` is the UTC date of the session start. Sort (`session_id`, `seq`). Only frames with a payload get a raw row. Source: Corvus `services/src/corvus_services/schema.py:64-79`, `iceberg_sink.py:70-84`, `codec.py:140-164`.
+- `offset_nanos` is nanoseconds since session start on a monotonic clock, not since the previous packet (Corvus `proto/capture.proto:110-111`). A time delta is therefore a difference of consecutive offsets within one direction.
+- `packet_type` is Corvus' version-stable packet vocabulary id, 0 when unmapped. `wire_packet_id` is the version-dependent id on the wire (`capture.proto:114-117`).
+- `direction`: 0 unspecified, 1 serverbound, 2 clientbound.
+- `seq` is monotonic per session across both directions. A gap means a dropped frame (`capture.proto:92-96, 108-109`). The natural key is (`session_id`, `seq`), not (`session_id`, `direction`, `seq`).
+- The backend server is not in `capture.raw`. It is `capture.segments.backend_server`, joined on (`session_id`, `segment`).
+- Other Corvus tables now written:
+  - `capture.sessions`: `session_id`, `player_key`, `pseudonym_key_id`, `client_protocol_version`, `observed_protocol_version`, `proxy_id`, `plugin_version`, `started_at`, `text_packets_captured`, `names_kept`.
+  - `capture.segments`: `session_id`, `segment`, `backend_server`, `game_context`, `client_brand`, `started_at`, `cloudnet_task`, `cloudnet_groups`, `cloudnet_node`, `cloudnet_environment`, `stage`. It has no `player_key`.
+  - `capture.session_ends`: `session_id`, `player_key`, `ended_at`, `dropped_queue_full`, `dropped_privacy`, `listener_errors`, `dropped_transport`. The counters are per message since the last batch, so the session total is the sum. A crashed session has no row.
+- Redelivered session, segment and end messages append duplicate rows. Readers dedupe on `session_id` (and `segment`).
+- `capture.events` has the Parquet event columns plus `player_key`. It has no protocol column.
+- Erasure today: Corvus deletes the player's rows in all five `capture` tables with copy-on-write deletes, tags commits with the snapshot summary property `corvus.erasure-request`, and expires snapshots before the cut. Request state lives in Postgres `corvus.erasure_requests`, not in a lake table. Option B needs a Corvus change that appends to `quality.erasure_requests` (task 2.7).
+- Known Corvus gap: ingest checks `players.erased_at` but never reads `corvus.blocklist`. A pseudonym erased before it was ever seen is not blocked at ingest (open question 15).
+
+**Deviation from the concept's dedup key:** the concept uses (session_id, direction, seq). This change uses (session_id, seq). Reason: `seq` is unique per session across both directions, so `direction` adds nothing to the key, and a gap check per direction would report false gaps.
 
 ## Decision drivers
 
@@ -37,9 +58,9 @@ Volume: at most 10 players per day, 1 to 4 hours each. That is 1.4 to 14 million
 
 **Consequences:** the concept's names appear only in this document and in the runbooks, which map them. Polaris grants are per namespace, so each namespace gets its own write rights (Kubernetes-FLUX dependency).
 
-### 2. Source of truth: `capture.raw` and `capture.events`, both read by the lake
+### 2. Source of truth: the Corvus capture tables, read by the lake
 
-**Decision:** the lake jobs read both Corvus tables and never write to them. `capture.raw` gives packet identity, direction, state, packet ids, timing and the payload. `capture.events` gives the decoded fields (movement, interactions and the other derived columns) that silver carries and that the session statistics use. Both carry `player_key` and are keyed by (session_id, direction, seq), which task 1.1 confirms. The silver build joins them on that key. The pipeline role gets table-level read on both tables, and no write on `capture`.
+**Decision:** the lake jobs read the Corvus tables and never write to them. `capture.raw` gives packet identity, direction, state, packet ids, timing and the payload. `capture.events` gives the decoded fields (movement, interactions and the other derived columns) that silver carries and that the session statistics use. `capture.sessions`, `capture.segments` and `capture.session_ends` give the session facts: client brand and version, the backend server, the disconnect and the dropped-packet counters. Both packet tables carry `player_key` and are keyed by (session_id, seq), as verified above. The silver build joins them on that key. Readers of the session tables dedupe on `session_id` (and `segment`), because redelivery appends duplicates. The pipeline role gets table-level read on all five tables, and no write on `capture`.
 
 **Data minimisation inside the lake:** `refined.packets` carries no payload column. Payload is read from `capture.raw` only for the packet classes that need it (decision 5), and it is copied only into `refined.plugin_messages`. Chat, login, sign and book payloads are never copied into silver or gold. This keeps the concept's privacy recommendation for the derived layers, without changing the bronze decision.
 
@@ -72,16 +93,16 @@ Checks are data in `dags/lake/layers/checks.py`: id, scope, metric, threshold an
 | `schema.capture_raw` | table | yes | Column names and types of `capture.raw` match the expected schema version. |
 | `schema.capture_events` | table | yes | Column names and types of the event columns the lake reads from `capture.events` match the expected schema version. |
 | `events.coverage` | table | no | Share of keys present in only one of `capture.raw` and `capture.events`, per day. Warn above 0.1 %. |
-| `key.nulls` | table | yes | Null rate of `session_id`, `direction`, `seq`, `player_key`, `date` is 0. |
-| `rows.reconcile` | table | yes | Distinct (session_id, direction, seq) of the day in `capture.raw` equals the rows in `refined.packets` plus `row_count` of the day's quarantined sessions. |
+| `key.nulls` | table | yes | Null rate of `session_id`, `direction`, `seq`, `player_key`, `date` is 0. `player_key` is nullable in `capture.raw`, so the rule is enforced here. |
+| `rows.reconcile` | table | yes | Distinct (session_id, seq) of the day in `capture.raw` equals the rows in `refined.packets` plus `row_count` of the day's quarantined sessions. |
 | `rows.baseline` | table | yes | Distinct rows at least 50 % of the median of the 7 days before. Protects against an ingest outage. Override with `force_publish`. |
 | `dup.rate` | table | no | Exact duplicate rate. Warn above 5 %. |
-| `dup.conflict` | session | session | Same (session_id, direction, seq) with a different content hash. Quarantines the session. |
-| `seq.gaps` | session and direction | session | Missing seq ratio per session and direction (missing over max seq). Above 1 % quarantines that session. Table p99 is recorded. This is the concept's gap check, which it runs as a daily query. |
+| `dup.conflict` | session | session | Same (session_id, seq) with a different content hash. Quarantines the session. |
+| `seq.gaps` | session | session | Missing seq ratio per session, over the seq values of both directions (missing over max seq). Above 1 % quarantines that session. Table p99 is recorded. The concept runs this check per direction; this change does not, because `seq` spans both directions. Open question 17 covers payload-less frames, which are not in `capture.raw`. |
 | `time.monotonic` | session | session | Share of timestamp decreases in seq order. Above 0.1 % quarantines the session. |
-| `time.skew` | table | no | p50, p99 and max of the difference between server and client time, where both exist. Warn when p99 exceeds 5 s. |
-| `drops.reported` | session | no | Dropped-packet counter per session, if Corvus writes it (open question 1). Otherwise verdict `not_available`, which is recorded, not a failure. |
-| `session.complete` | session | no | Share of sessions with a login and a disconnect. Incomplete sessions are flagged, not quarantined. |
+| `time.skew` | table | no | p50, p99 and max of the difference between server and client time, where both exist. Warn when p99 exceeds 5 s. The wall-clock source is open question 18. |
+| `drops.reported` | session | no | Sum of `dropped_queue_full`, `dropped_privacy` and `dropped_transport` over the session's `capture.session_ends` rows. A session without such a row (crashed) gets `not_available`, which is recorded, not a failure. |
+| `session.complete` | session | no | Share of sessions with a login and a `capture.session_ends` row (the disconnect). Incomplete sessions are flagged, not quarantined. |
 | `payload.present` | table | no | Share of rows in the packet classes that need payload where payload is null. |
 | `versions.distribution` | table | no | Count per protocol version. Warn for a version that is not in `ref.packet_names`. |
 
@@ -93,13 +114,13 @@ Session-level checks write `refined.sessions.verdict` (`accepted`, `flagged` or 
 
 **Options for deduplication**
 
-1. Keep one row per (session_id, direction, seq). If the content hash of the duplicates differs, quarantine the session. Chosen.
+1. Keep one row per (session_id, seq). If the content hash of the duplicates differs, quarantine the session. Chosen.
 2. Keep the last delivered row. Rejected: delivery order is not stored, so "last" cannot be reproduced.
 3. Deduplicate at read time. Rejected: each consumer would repeat it, and training would depend on it.
 
 **Decision:**
 
-- `refined.packets`: one row per (session_id, direction, seq), with `packet_name` (joined from `ref.packet_names` on protocol_version, state, direction and wire_packet_id), `time_delta_ms` (to the previous packet of the same session and direction, from `offset_nanos`), `length`, `payload_hash` (xxHash64 over the payload), `protocol_version`, and the decoded event fields listed in `dags/config/layers.yaml` (joined from `capture.events` on the same key). The table is partitioned by `date` and sorted by (session_id, seq) within a direction.
+- `refined.packets`: one row per (session_id, seq), with `direction`, `packet_type`, `packet_name` (joined from `ref.packet_names` on protocol_version, state, direction and wire_packet_id), `time_delta_ms` (to the previous packet of the same session and direction, from `offset_nanos`), `length`, `payload_hash` (xxHash64 over the payload), `protocol_version` (from `capture.raw`, since `capture.events` has no protocol column), and the decoded event fields listed in `dags/config/layers.yaml` (joined from `capture.events` on the same key). The table is partitioned by `date` and sorted by (session_id, seq).
 - Hash-based conflict detection uses `xxhash64` over the content columns. Exact duplicates are dropped.
 - Decoding: the configuration-phase packets (custom payload with the channel `minecraft:brand` or `minecraft:register`) are decoded in Python by a pure module `lake_decode` (VarInt length prefix, UTF-8 brand, NUL-separated channel list). The Spark job is still self-contained: the module is shipped to the driver in the same ConfigMap, as a Python file, not as the `lake` package. It is tested with plain bytes, no Spark.
 - `refined.client_info`: one row per session, with brand, the channel list, the number of channels and the client version, from the configuration phase. Sessions without these packets get nulls and the verdict flag `no_config_phase`.
@@ -112,7 +133,7 @@ Session-level checks write `refined.sessions.verdict` (`accepted`, `flagged` or 
 
 **Decision:**
 
-- `ref.packet_names` (protocol_version, state, direction, packet_id, packet_name) and `ref.backend_config` (backend, period_start, period_end, anti_xray_mode) are loaded by the manual DAG `lake_reference`, from CSV files in the repository (`dags/config/reference/`). The files are reviewed in pull requests, and their Git history is the version history.
+- `ref.packet_names` (protocol_version, state, direction, packet_id, packet_name) and `ref.backend_config` (backend, period_start, period_end, anti_xray_mode) are loaded by the manual DAG `lake_reference`, from CSV files in the repository (`dags/config/reference/`). The files are reviewed in pull requests, and their Git history is the version history. The anti-xray mode file is transcribed by hand from the Paper configuration files (decided 2026-11-21, open question 13). A packet's backend is `capture.segments.backend_server`, joined on (session_id, segment).
 - The loader validates every row (the state and direction vocabularies, unique keys) and replaces the table for the affected protocol versions in one `MERGE`. It does not call the network.
 - The packet-name table is generated once from the PacketEvents registry for the supported range 1.21.x to 26.3 (concept, "Versionsbereich"). The generator is not part of this change. Its output is the input file, and the open question on PacketEvents coverage of 26.3 stays open (open question 5).
 
@@ -147,7 +168,7 @@ Labels live in Iceberg tables in namespace `labels` and never in `capture`. Ever
 
 1. Admins: `trusted` (known and unremarkable, a negative for "no hack") and `untrusted` (unknown; not a cheater label). `cheater` means a confirmed hack, with `hack_types` (for example killaura, fly, velocity).
 2. Controlled recordings: the team plays on a test server with known hack clients and records when each module is on or off. These are the only timed labels for the hack type.
-3. Blackhole: confirmed bans and staff decisions, as an additional source. Blackhole gives a broad time range.
+3. Blackhole: confirmed bans and staff decisions, as an additional source. Blackhole gives a broad time range. In v1 only a source adapter interface ships, with no concrete Blackhole source (open question 11).
 
 **Contract, `labels.sessions`** (one row per admin or Blackhole decision):
 
@@ -170,7 +191,7 @@ Labels live in Iceberg tables in namespace `labels` and never in `capture`. Ever
 - Conflicting labels overlapping a session (for example `trusted` and `cheater`) give `unknown`, with a warning `labels.conflict` in `quality.check_results`. The conflict is never resolved silently.
 - Upserts are `MERGE INTO` on `label_id`, keeping the newest `record_version`. Rows are never deleted except by erasure (decision 14).
 
-### 10. How admins enter labels (open)
+### 10. How admins enter labels (decided, sub-points open)
 
 **Options**
 
@@ -178,7 +199,7 @@ Labels live in Iceberg tables in namespace `labels` and never in `capture`. Ever
 2. A small internal form that writes to the Polaris tables through an API. Rejected for v1: a new service with write rights to the labels, and a separate login path.
 3. Superset with write access. Rejected: Trino and Superset are read-only by decision (decision 17). Superset stays the reading tool.
 
-**Decision:** option 1 is the default in this change, and the decision is open (open question 2). The CSV schema is the `labels.sessions` contract, and the loader runs in the same `lake_labels` DAG as the Blackhole import.
+**Decision (2026-11-21, maintainer):** option 1, a CSV file per batch, reviewed, imported by `lake_labels`. The CSV schema is the `labels.sessions` contract, and the loader runs in the same `lake_labels` DAG as the Blackhole adapter. Still open (open question 2): who may import a batch, and where the CSV files are kept.
 
 ### 11. Train and test split by player
 
@@ -192,7 +213,7 @@ Labels live in Iceberg tables in namespace `labels` and never in `capture`. Ever
 
 - `features.session_stats`: one row per session, with packets per second and per packet name, and the distribution of time deltas (percentiles), per direction.
 - `features.windows`: fixed windows of 256 to 512 packets per session (concept: 3 to 13 seconds at this rate). A row has the window bounds, `player_key`, the `split`, the token array and `tokenizer_version`, the `label` (copied from `labels.sessions` or `labels.windows` for the window's time range), `source_snapshot_id` (the refined snapshot the window was built from) and `feature_version`.
-- Tokens in v1: direction, the version-independent packet name, a time-delta bucket, and a protocol-version token. This is the concept's starting mixture. Payload bytes are not tokenised in v1; they are for the later sequence model (concept, "Tokenisierung").
+- Tokens in v1: direction, the version-independent packet name (`packet_type`, Corvus' version-stable id, 0 when unmapped), a time-delta bucket, and a protocol-version token. This is the concept's starting mixture. Payload bytes are not tokenised in v1; they are for the later sequence model (concept, "Tokenisierung").
 - Versioning: a change of the token rule, the window size or a feature definition creates a new `tokenizer_version` or `feature_version`. A built version is never rewritten, so a snapshot pinned by Corvus stays valid.
 - `features.build_runs`: one row per (`feature_version`, `tokenizer_version`, `date`) build, with the refined snapshot id, the labels snapshot id, the code version and the build time.
 
@@ -219,26 +240,28 @@ Labels live in Iceberg tables in namespace `labels` and never in `capture`. Ever
 
 **Ownership**
 
-- Corvus deletes the player's rows in `capture.raw` and `capture.events` itself: row deletes by the player's sessions, then immediate expiry and orphan removal (Corvus PR `feat(services): erase and retain capture data in iceberg tables`). Corvus also drops the tags and marks the datasets of decision 13.
+- Corvus deletes the player's rows in all five `capture` tables itself (`raw`, `events`, `sessions`, `segments`, `session_ends`) with copy-on-write deletes, tags the commits with `corvus.erasure-request`, and expires snapshots before the cut (Corvus PR `feat(services): erase and retain capture data in iceberg tables`). Corvus also drops the tags and marks the datasets of decision 13. What Corvus still has to add is the append of a pending row to `quality.erasure_requests` (task 2.7).
 - The lake deletes the player's rows in every downstream table: `refined.packets`, `refined.client_info`, `refined.plugin_messages`, `refined.sessions`, `features.session_stats`, `features.windows`, `labels.sessions`, `labels.windows` and `quality.quarantine_sessions`. `quality.check_results` holds no keys (decision 4), so it is not touched.
-- `lake_erasure` has no delete right on `capture`. It has read on `capture.raw` and `capture.events`, only for the guard below.
+- `lake_erasure` has no delete right on `capture`. It has read on the five `capture` tables, only for the guard below. `capture.segments` has no `player_key`, so its guard count joins through `capture.sessions` on `session_id`.
 
 **Lake procedure, per request (idempotent):**
 
 1. Read the requests with status `pending` from `quality.erasure_requests` (contract below).
-2. Guard: count the player's rows in `capture.raw` and `capture.events`. Both must be 0. Otherwise the request gets status `failed_capture_not_empty` and nothing downstream is deleted. This shows that Corvus has not finished its part.
+2. Guard: count the player's rows in all five `capture` tables (`capture.segments` through `capture.sessions`). All counts must be 0. Otherwise the request gets status `failed_capture_not_empty` and nothing downstream is deleted. This shows that Corvus has not finished its part.
 3. Guard: the tag check of decision 13.
 4. Drop the audit branches of the downstream tables, then delete the player's rows in the downstream tables.
 5. `expire_snapshots(older_than = now, retain_last = 1)` and `remove_orphan_files(older_than = now)` on each downstream table. Tags that were kept (datasets without the player) still protect their snapshots, as Iceberg intends.
 6. Set the request to `done` with the lake run id, the completion time and the snapshot ids after cleanup.
 
-**How the lake learns about an erasure (open question 14, recommendation):**
+**How the lake learns about an erasure (open question 14, decided 2026-11-21: option B):**
 
 - Option A: Corvus calls the Airflow REST API to start `lake_erasure` with a run id equal to the request id. Immediate. But Corvus needs Airflow credentials and must know the DAG and its failure modes, and an Airflow outage forces retry logic into Corvus.
 - Option B: Corvus appends a row to `quality.erasure_requests`, an Iceberg table in the lake, with its existing writer. `lake_erasure` runs every hour, processes the pending rows and writes the status back. Durable, auditable and visible in Superset. Costs up to one hour of latency and one table-level write grant for Corvus.
 - Option C: the lake reads Corvus' erasure requests from a Corvus API or from Corvus Postgres. Keeps Corvus as the single source, but adds a network path and credentials from the lake to Corvus, and the lake depends on Corvus being up when it runs.
 
-**Recommendation: option B.** Hourly latency is far inside any erasure deadline, which is measured in weeks. The request is durable before the lake sees it, and the status comes back to the same table, so Corvus can confirm completion without polling the lake. It needs no Airflow credentials in Corvus and no new API.
+**Decision: option B** (maintainer, 2026-11-21). Hourly latency is far inside any erasure deadline, which is measured in weeks. The request is durable before the lake sees it, and the status comes back to the same table, so Corvus can confirm completion without polling the lake. It needs no Airflow credentials in Corvus and no new API.
+
+`quality.erasure_requests` is a lake table. Corvus' Postgres table `corvus.erasure_requests` stays the Corvus-side state.
 
 **Contract of `quality.erasure_requests`:** `request_id` (string, unique), `player_key`, `requested_at`, `capture_erased_at`, `capture_raw_snapshot_id`, `capture_events_snapshot_id` (written by Corvus after its erasure), and `status` (`pending`, `done`, `failed_capture_not_empty`, `failed_tagged_snapshot`), `failure_reason`, `lake_run_id`, `completed_at` (written by the lake). Corvus has table-level write on this table only.
 
@@ -252,6 +275,7 @@ Labels live in Iceberg tables in namespace `labels` and never in `capture`. Ever
 
 - `capture.raw`: permanent, `retention_days: null`. The maintainer's decision. Reviewed yearly, as the concept's Datenschutz section requires (open question 3 for the purpose and the review date).
 - `capture.events`: as today (no retention). Read by the silver build (decision 2). Erased by Corvus on request.
+- `capture.sessions`, `capture.segments`, `capture.session_ends`: no retention set by this change. Read by the silver build (decision 2). Erased by Corvus on request.
 - `refined.*`, `features.*`: rebuildable from `capture.raw`, so the default proposal is 365 days, applied by the maintenance DAG with the day column per table. Open question 3.
 - `labels.*`: no automatic expiry. Labels are reviewed yearly with the data.
 - `quality.check_results`: 400 days. `quality.quarantine_sessions`: 30 days (it holds session ids and keys). `quality.erasure_requests`: kept as evidence of each erasure. Its key retention is open (open question 16).
@@ -281,19 +305,23 @@ Labels live in Iceberg tables in namespace `labels` and never in `capture`. Ever
 
 ## Open questions
 
-1. **Corvus schema of `capture.raw`.** The maintainer's column list and the concept's field list differ. Still open: the name of the session column, the exact meaning of `offset_nanos` (offset from session start, or from the previous packet), what `packet_type` and `wire_packet_id` hold, and whether Corvus writes a dropped-packet counter per session. Task 1.1.
-2. **Label entry path.** Options and the default are in decision 10. The maintainer decides. Also open: who may import, and where the CSV files are kept.
+Items marked "Decided" were decided by the maintainer on 2026-11-21. Everything else stays open and is not decided silently.
+
+1. **Corvus schema of `capture.raw`. Resolved 2026-11-21** from Corvus origin/main (see "Verified facts from Corvus origin/main"). The key is (session_id, seq), `offset_nanos` counts from session start, `packet_type` is the version-stable id and `wire_packet_id` the wire id. The backend is in `capture.segments`, and dropped-packet counters are in `capture.session_ends`. Task 1.1 keeps the re-check on the deployed table.
+2. **Label entry path. Partly decided.** Decided 2026-11-21: option 1, a CSV file per batch, reviewed, imported by `lake_labels` (decision 10). Still open: who may import a batch, and where the CSV files are kept.
 3. **Retention and purpose.** The default proposals in decision 15 need a maintainer decision, together with a written purpose and review date for permanent bronze.
-4. **Columns of `capture.events` in silver.** Resolved in principle: the layers read `capture.events` (decision 2). Still open: which of its columns `refined.packets` carries (task 1.1 and `layers.yaml`).
+4. **Columns of `capture.events` in silver.** The layers read `capture.events` (decision 2). Still open: which of its columns `refined.packets` carries (task 1.1 and `layers.yaml`).
 5. **Packet-name coverage.** Whether PacketEvents already knows protocol 26.3 (concept, Versionsbereich) and the generator for `ref.packet_names`.
 6. **Late-data rate.** Unknown until the pilot runs. It sets whether the nightly run needs a lookback.
 7. **Split ratio.** 80/20 by player is a default. Small test sets with few players are noisy; the ratio is set after the first label counts.
 8. **Models and retention.** Whether models trained on a dataset marked `needs_rebuild` need a retention exception, or are retrained. This is Corvus' decision, recorded here because erasure changes the dataset.
 9. **Plaintext chat and login names.** The maintainer decided plaintext in bronze. The concept recommends `meta_only` for text. The layers keep text out of silver and gold, but the bronze risk needs a privacy review and a written purpose before go-live (task 1.4).
-10. **Airflow version.** Code pins Airflow 3.3.2, the FLUX proposal pins chart 1.22.0 (Airflow 3.2.2). Confirm before go-live (task 1.2).
-11. **Blackhole source and key mapping.** The access path (API export, database read or pushed events) is open. Also open: how Blackhole gets the same `player_key` as Corvus, which uses an HMAC key that the lake does not hold. The label contract is fixed here; the source is not.
+10. **Airflow version. Resolved 2026-11-21.** `pyproject.toml` on origin/main pins `apache-airflow==3.4.0`, and Kubernetes-FLUX main sets `airflowVersion` 3.4.0. Both agree, so the earlier 3.3.2 and 3.2.2 pins are superseded. Task 1.2 keeps the cluster check and the pool.
+11. **Blackhole source and key mapping. Stays open on purpose** (decided 2026-11-21). `lake_labels` ships a source adapter interface with no concrete Blackhole source in v1. Still open: the access path (API export, database read or pushed events), and how Blackhole gets the same `player_key` as Corvus, which uses an HMAC key that the lake does not hold. The label contract is fixed here; the source is not.
 12. **Protocol coverage.** Whether the configuration-phase decoder holds across the whole range 1.21.x to 26.3 (the concept says so for 1.21.x, which needs a check on real data), before the brand and channel features are trusted.
-13. **Anti-xray mode source.** How `ref.backend_config` gets its values (Paper configuration files, reviewed by hand, or a Corvus export). The concept asks for the mode per backend and period.
-14. **Erasure trigger.** Options A, B and C in decision 14. Recommendation: B, Corvus appends to `quality.erasure_requests` and the lake DAG polls it hourly. The maintainer decides, and Corvus' erasure PR must match it. Blackhole-originated requests, if any, enter the same table.
-15. **Ingest after erasure.** Corvus must stop writing an erased key, or the lake's rebuild brings the rows back. Corvus' design decides how (for example a block list checked at ingest).
+13. **Anti-xray mode source. Decided 2026-11-21:** a reviewed CSV file in `dags/config/reference/`, transcribed by hand from the Paper configuration files and loaded by `lake_reference` (decision 6). The concept asks for the mode per backend and period; the periods are part of the file.
+14. **Erasure trigger. Decided 2026-11-21: option B.** Corvus appends to `quality.erasure_requests` and `lake_erasure` polls hourly (decision 14). The Corvus change is task 2.7. Blackhole-originated requests, if any, enter the same table.
+15. **Ingest after erasure.** Still open. Known Corvus gap: ingest checks `players.erased_at` but never reads `corvus.blocklist`, so a pseudonym erased before it was ever seen is not blocked at ingest. Corvus' design decides how this is closed (for example a block list checked at ingest). It is required before go-live.
 16. **Retention of erasure evidence.** `quality.erasure_requests` holds the key as proof of erasure. Whether the key stays, is hashed, or is removed after a set period is a decision for the maintainers together with the legal basis.
+17. **Seq gaps and payload-less frames (new).** `capture.raw` keeps only frames with a payload. If Corvus sees frames without payload, their `seq` values are missing from `capture.raw`, and `seq.gaps` (decision 4) would report them as dropped frames. Confirm with Corvus whether such frames exist, and check real data, before the gap threshold is trusted.
+18. **Wall-clock source for `time.skew` (new).** `offset_nanos` counts from session start, so the check needs a wall-clock time on both sides. `capture.sessions.started_at` and `capture.segments.started_at` exist, but whether they give a server and client pair per packet is not verified. Decide the source before the check is written.
