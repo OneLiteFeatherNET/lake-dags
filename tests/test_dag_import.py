@@ -35,7 +35,13 @@ def test_iceberg_maintenance_has_one_task_per_configured_table(dag_bag):
     dag = dag_bag.dags["iceberg_maintenance"]
 
     task_ids = {task.task_id for task in dag.tasks}
-    assert task_ids == {"maintain_capture_raw", "maintain_capture_events"}
+    assert task_ids == {
+        "maintain_capture_raw",
+        "maintain_capture_events",
+        "maintain_capture_sessions",
+        "maintain_capture_segments",
+        "maintain_capture_session_ends",
+    }
 
 
 def test_iceberg_maintenance_runs_nightly_at_0300_utc(dag_bag):
