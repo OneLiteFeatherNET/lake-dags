@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 
 from airflow.sdk import dag, task
 
+from lake.assets import iceberg_asset
 from lake.config import TableConfig, load_config
 from lake.kube import KubeSparkClient
 from lake.manifest import read_job_source
@@ -22,7 +23,11 @@ def _now() -> datetime:
 
 
 def _maintenance_task(table: TableConfig) -> None:
-    @task(task_id=f"maintain_{table.name.replace('.', '_')}")
+    # Inlet, not outlet: maintenance must never trigger asset-scheduled DAGs such as lake_features.
+    @task(
+        task_id=f"maintain_{table.name.replace('.', '_')}",
+        inlets=[iceberg_asset(CONFIG.catalog, table.name)],
+    )
     def maintain() -> None:
         run_table_maintenance(
             KubeSparkClient(),

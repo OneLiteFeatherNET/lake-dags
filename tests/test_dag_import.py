@@ -60,3 +60,19 @@ def test_iceberg_maintenance_runs_one_table_at_a_time(dag_bag):
     dag = dag_bag.dags["iceberg_maintenance"]
 
     assert dag.max_active_tasks == 1
+
+
+def test_each_maintenance_task_declares_its_table_as_inlet_asset(dag_bag):
+    dag = dag_bag.dags["iceberg_maintenance"]
+
+    for table in load_config().tables:
+        task = dag.get_task(f"maintain_{table.name.replace('.', '_')}")
+        uris = [asset.uri for asset in task.inlets]
+        assert uris == [f"iceberg://corvus/{table.name}"], task.task_id
+
+
+def test_maintenance_tasks_declare_no_outlet_assets(dag_bag):
+    dag = dag_bag.dags["iceberg_maintenance"]
+
+    for task in dag.tasks:
+        assert task.outlets == [], f"{task.task_id} must not trigger asset-scheduled DAGs"
