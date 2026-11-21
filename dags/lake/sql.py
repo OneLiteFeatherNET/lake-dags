@@ -43,6 +43,7 @@ def build_statements(
     orphan_before = utc_now - timedelta(days=ORPHAN_AGE_DAYS)
     statements.append(
         f"CALL {catalog}.system.remove_orphan_files(table => '{name}', "
-        f"older_than => TIMESTAMP '{orphan_before.strftime(_TIMESTAMP_FORMAT)}')"
+        f"older_than => TIMESTAMP '{orphan_before.strftime(_TIMESTAMP_FORMAT)}', "
+        "prefix_listing => true)"
     )
     return statements
