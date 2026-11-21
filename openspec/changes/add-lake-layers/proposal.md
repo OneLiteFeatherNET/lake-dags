@@ -11,28 +11,29 @@ Admins label players as trusted, untrusted or cheater, and the team records cont
 The code ships as `feat(dags)`, PR title `feat(dags): add refined, label and feature layers`. All code changes are in `lake-dags`. Platform changes are listed under Dependencies and live in Kubernetes-FLUX.
 
 - Namespaces in catalog `corvus`. `capture` (bronze, owned by Corvus) is kept. New: `refined` (silver), `features` (gold), `labels`, `ref` (reference data) and `quality`. Each maps to a concept namespace (`mc_silver` to `refined`, and so on). design.md, decision 1, explains why the deployed names are kept.
-- Silver, built from `capture.raw` joined with the decoded fields of `capture.events`: `refined.packets` (deduplicated on (session_id, direction, seq), with packet name and time delta), `refined.client_info` (per session: brand, channel list, client version from the configuration phase), `refined.plugin_messages` (custom payloads with payload kept), `refined.sessions` (per-session summary and quality verdict).
+- Silver, built from `capture.raw` joined with the decoded fields of `capture.events`, and from the session tables (`capture.sessions`, `capture.segments`, `capture.session_ends`): `refined.packets` (deduplicated on (session_id, seq), with packet name and time delta), `refined.client_info` (per session: brand, channel list, client version from the configuration phase), `refined.plugin_messages` (custom payloads with payload kept), `refined.sessions` (per-session summary and quality verdict).
 - Gold: `features.session_stats` (rates per packet name, gap distribution), `features.windows` (token windows with `tokenizer_version` and the source snapshot id), `features.build_runs` (provenance).
 - Labels: `labels.sessions` (trusted, untrusted or cheater, hack types, `label_reason`, source, editor, time range) and `labels.windows` (module on and off times from controlled recordings). Labels are Iceberg tables, versioned by snapshot. Training uses a train or test split by player.
 - Reference: `ref.packet_names` (protocol version, state, direction, packet id to name) and `ref.backend_config` (anti-xray mode per backend and period). Both are loaded from reviewed files in the repository.
-- Write-Audit-Publish for `refined`, as before. Data-quality checks now include the seq-gap check per session and direction and a dropped-packets signal when Corvus reports one.
+- Write-Audit-Publish for `refined`, as before. Data-quality checks now include the seq-gap check per session (`seq` spans both directions) and the dropped-packet counters of `capture.session_ends`.
 - DAGs: `lake_reference` (manual), `lake_refined` (daily), `lake_labels` (daily), `lake_features` (triggered by the assets of `lake_refined` and `lake_labels`), `lake_erasure` (hourly, processes the erasure requests Corvus writes to `quality.erasure_requests`, and deletes the player in every downstream layer).
 - `dags/config/maintenance.yaml` changes `capture.raw` retention from 21 days to permanent (`retention_days: null`), as decided by the maintainer. This is a change in deployed behaviour and is listed in the tasks.
 
 ## Deviations from the concept document
 
 - Trino is read-only for people (Superset and staff). The concept has Trino writing silver and gold. Writes are Spark jobs started by Airflow, so that every write goes through reviewed code, the audit gate and idempotent partition overwrites.
+- The concept dedups over (session_id, direction, seq). This change uses (session_id, seq), because Corvus' `seq` is unique per session across both directions. The direction adds nothing to the key, and a gap check per direction would report false gaps (design, verified facts).
 - Namespace names are the deployed `capture` plus `refined`, `features`, `labels`, `ref` and `quality`, not `mc_*`. The concept's `mc_*` names would need a second catalog or a rename of the Corvus namespace.
 - The concept's privacy section recommends `meta_only` for chat and login names. The maintainer has decided that all packets are stored in plaintext. This change does not copy chat or login payloads into silver or gold. It requires a privacy review before go-live (task 1.4).
 
 ## Dependencies (Kubernetes-FLUX, separate change, `feat(data)`)
 
-None of this is implemented here, and the code cannot run in production until it exists.
+None of this is implemented here, and the code cannot run in production until it exists. The platform dependencies are proposed in Kubernetes-FLUX PR #706 (`docs(openspec): propose add-lake-layer-platform`), which this list follows. The S3 owner-permission fix (Kubernetes-FLUX #705) is merged.
 
 - Polaris namespaces `refined`, `labels`, `features`, `ref` and `quality` in catalog `corvus`.
-- Polaris principal role `lake_pipeline`: table-level read on `capture.raw` and `capture.events`; create and write on `refined`, `features`, `labels`, `ref` and `quality`. No delete on any table in `capture`.
-- Polaris principal role `lake_erasure`, separate from the pipeline: delete on the downstream tables (`refined`, `features`, `labels`, `quality` quarantine); read on `capture.raw` and `capture.events` for the guard; write on the status of `quality.erasure_requests`; the maintenance grants for expire and orphan cleanup on the downstream namespaces. No delete on `capture`.
-- Corvus (Kubernetes-FLUX and Corvus PR `feat(services): erase and retain capture data in iceberg tables`): table-level write on `quality.erasure_requests` only, for the principal Corvus already uses for ingest. Corvus erases its own `capture` tables.
+- Polaris principal role `lake_pipeline`: table-level read on the five `capture` tables (`raw`, `events`, `sessions`, `segments`, `session_ends`); create and write on `refined`, `features`, `labels`, `ref` and `quality`. No delete on any table in `capture`.
+- Polaris principal role `lake_erasure`, separate from the pipeline: delete on the downstream tables (`refined`, `features`, `labels`, `quality` quarantine); read on the five `capture` tables for the guard; write on the status of `quality.erasure_requests`; the maintenance grants for expire and orphan cleanup on the downstream namespaces. No delete on `capture`.
+- Corvus (Kubernetes-FLUX and Corvus PR `feat(services): erase and retain capture data in iceberg tables`): table-level write on `quality.erasure_requests` only, for the principal Corvus already uses for ingest. Corvus already erases its five `capture` tables; the change adds the pending row in `quality.erasure_requests`.
 - Polaris maintenance grants (`lake_maintenance`) and read grants (`lake_sql`) extended to the new namespaces.
 - Entra ID: app roles `lake-pipeline` and `lake-erasure` on the API app "Polaris", client apps assigned to them, client secrets as SOPS Secrets.
 - Airflow pool `lake_spark` (2 slots), used by all Spark tasks of this repository.
