@@ -28,6 +28,9 @@ def test_real_maintenance_yaml_loads_with_expected_tables():
     assert config.tables == [
         TableConfig(name="capture.raw", retention_days=None, day_column="date"),
         TableConfig(name="capture.events", retention_days=None, day_column="date"),
+        TableConfig(name="capture.sessions", retention_days=None, day_column="date"),
+        TableConfig(name="capture.segments", retention_days=None, day_column="date"),
+        TableConfig(name="capture.session_ends", retention_days=None, day_column="date"),
     ]
 
 

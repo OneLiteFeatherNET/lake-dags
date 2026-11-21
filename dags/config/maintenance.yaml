@@ -16,3 +16,13 @@ tables:
   - name: capture.events
     retention_days: null
     day_column: date
+  # Corvus session metadata: kept as long as the raw capture; erasure is an Iceberg row delete by Corvus.
+  - name: capture.sessions
+    retention_days: null
+    day_column: date
+  - name: capture.segments
+    retention_days: null
+    day_column: date
+  - name: capture.session_ends
+    retention_days: null
+    day_column: date
