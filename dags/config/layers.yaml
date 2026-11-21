@@ -1,0 +1,70 @@
+# Settings of the refined, label and feature layers (add-lake-layers, design decisions 4, 11, 12, 15).
+# Pure configuration: no host names, no secrets.
+
+window:
+  # Tokens per window: 256 to 512 packets (decision 12).
+  size_packets: 256
+
+split:
+  # Share of players in the train split; the rest is test. Assigned per player_key (decision 11).
+  train_ratio: 0.8
+  seed: 20261121
+
+# Check settings (decision 4). blocking applies to table checks: a failure fails the day.
+# Session checks quarantine or flag one session and never block the day.
+# threshold: ratio (0 to 1) for rate checks, milliseconds for time.skew, null when there is no limit.
+checks:
+  - id: schema.capture_raw
+    blocking: true
+    threshold: null
+  - id: schema.capture_events
+    blocking: true
+    threshold: null
+  - id: events.coverage
+    blocking: false
+    threshold: 0.001
+  - id: key.nulls
+    blocking: true
+    threshold: null
+  - id: rows.reconcile
+    blocking: true
+    threshold: null
+  - id: rows.baseline
+    blocking: true
+    threshold: 0.5
+  - id: dup.rate
+    blocking: false
+    threshold: 0.05
+  - id: dup.conflict
+    blocking: false
+    threshold: null
+  - id: seq.gaps
+    blocking: false
+    threshold: 0.01
+  - id: time.monotonic
+    blocking: false
+    threshold: 0.001
+  - id: time.skew
+    blocking: false
+    threshold: 5000
+  - id: drops.reported
+    blocking: false
+    threshold: null
+  - id: session.complete
+    blocking: false
+    threshold: null
+  - id: payload.present
+    blocking: false
+    threshold: null
+  - id: versions.distribution
+    blocking: false
+    threshold: null
+
+# Tables of the layers that have no maintenance entry (maintenance.yaml), with their retention (decision 15).
+kept_tables:
+  - name: labels.sessions
+    retention_days: null
+  - name: labels.windows
+    retention_days: null
+  - name: quality.erasure_requests
+    retention_days: null

@@ -3,6 +3,8 @@ from pathlib import Path
 
 import pytest
 
+from lake.config import load_config
+
 if importlib.util.find_spec("airflow") is None:
     pytest.skip("apache-airflow is not installed", allow_module_level=True)
 
@@ -36,11 +38,7 @@ def test_iceberg_maintenance_has_one_task_per_configured_table(dag_bag):
 
     task_ids = {task.task_id for task in dag.tasks}
     assert task_ids == {
-        "maintain_capture_raw",
-        "maintain_capture_events",
-        "maintain_capture_sessions",
-        "maintain_capture_segments",
-        "maintain_capture_session_ends",
+        f"maintain_{table.name.replace('.', '_')}" for table in load_config().tables
     }
 
 
