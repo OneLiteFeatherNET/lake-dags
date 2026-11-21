@@ -1,7 +1,7 @@
 schema: spec-driven
 
 context: |
-  Apache Airflow 3.3.2 DAGs and PySpark jobs for the OneLiteFeather data lake.
+  Apache Airflow 3.4.0 DAGs and PySpark jobs for the OneLiteFeather data lake.
   The DAGs run on the feather-core Kubernetes cluster: Airflow (KubernetesExecutor,
   git-sync from branch main, subPath dags) starts SparkApplications (Spark 4.1,
   Apache Iceberg 1.12 runtime) in namespace data. Iceberg tables live in the
@@ -11,10 +11,13 @@ context: |
   live in the Kubernetes-FLUX repository and are referenced as dependencies, never
   implemented here.
   Data: Corvus (Minecraft anti-cheat) writes capture.raw, the complete plaintext
-  packet capture of both directions, kept permanently, and capture.events, a derived
-  table. Both carry a pseudonymous player_key (HMAC of the player UUID; the key is
-  not in the lake). Delivery is at least once, so duplicates on (session_id,
-  direction, seq) are expected. Volume: up to about 10 players per day, 1 to 4 hours
+  packet capture of both directions, kept permanently, capture.events, a derived
+  table, and session metadata: capture.sessions, capture.segments (backend server and
+  client brand per segment) and capture.session_ends (drop counters per session).
+  Both capture.raw and capture.events carry a pseudonymous player_key (HMAC of the
+  player UUID; the key is not in the lake). Delivery is at least once, so duplicates
+  on (session_id, seq) are expected, because seq is monotonic per session across both
+  directions. Volume: up to about 10 players per day, 1 to 4 hours
   each, so 1.4 to 14 million packets and 1 to 15 GB per day.
   The lake is the source of truth for analysis; layers are refined (silver), features
   (gold), labels and reference data. Trino is read-only for people; all writes are
