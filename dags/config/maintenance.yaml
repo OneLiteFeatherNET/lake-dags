@@ -26,3 +26,29 @@ tables:
   - name: capture.session_ends
     retention_days: null
     day_column: date
+  # Layer tables (add-lake-layers, design decision 15). Rebuilt from capture.raw, so 365 days; the
+  # quarantine table holds session ids and player keys, so 30 days. Created by the layers DAGs.
+  - name: refined.packets
+    retention_days: 365
+    day_column: date
+  - name: refined.client_info
+    retention_days: 365
+    day_column: date
+  - name: refined.plugin_messages
+    retention_days: 365
+    day_column: date
+  - name: refined.sessions
+    retention_days: 365
+    day_column: date
+  - name: features.session_stats
+    retention_days: 365
+    day_column: date
+  - name: features.windows
+    retention_days: 365
+    day_column: date
+  - name: quality.check_results
+    retention_days: 400
+    day_column: date
+  - name: quality.quarantine_sessions
+    retention_days: 30
+    day_column: date

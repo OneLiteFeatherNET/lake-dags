@@ -31,6 +31,14 @@ def test_real_maintenance_yaml_loads_with_expected_tables():
         TableConfig(name="capture.sessions", retention_days=None, day_column="date"),
         TableConfig(name="capture.segments", retention_days=None, day_column="date"),
         TableConfig(name="capture.session_ends", retention_days=None, day_column="date"),
+        TableConfig(name="refined.packets", retention_days=365, day_column="date"),
+        TableConfig(name="refined.client_info", retention_days=365, day_column="date"),
+        TableConfig(name="refined.plugin_messages", retention_days=365, day_column="date"),
+        TableConfig(name="refined.sessions", retention_days=365, day_column="date"),
+        TableConfig(name="features.session_stats", retention_days=365, day_column="date"),
+        TableConfig(name="features.windows", retention_days=365, day_column="date"),
+        TableConfig(name="quality.check_results", retention_days=400, day_column="date"),
+        TableConfig(name="quality.quarantine_sessions", retention_days=30, day_column="date"),
     ]
 
 
