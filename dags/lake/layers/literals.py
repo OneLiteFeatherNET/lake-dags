@@ -10,6 +10,7 @@ import re
 from datetime import UTC, date, datetime
 
 _SAFE_TEXT = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+_SAFE_PHRASE = re.compile(r"^[A-Za-z0-9_.:,;() -]{1,256}$")
 _IDENTIFIER = re.compile(r"^[a-z_][a-z0-9_]{0,127}$")
 _HEX32 = re.compile(r"^[0-9a-fA-F]{64}$")
 _TABLE = re.compile(r"^(refined|features|labels|ref|quality)\.[a-z_][a-z0-9_]*$")
@@ -18,6 +19,13 @@ TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 def string_literal(value: str) -> str:
     if not _SAFE_TEXT.match(value):
+        raise ValueError(f"value '{value}' is not a safe SQL text literal")
+    return f"'{value}'"
+
+
+def phrase_literal(value: str) -> str:
+    """Human-readable text such as a failure reason: letters, digits and simple punctuation."""
+    if not _SAFE_PHRASE.match(value):
         raise ValueError(f"value '{value}' is not a safe SQL text literal")
     return f"'{value}'"
 
