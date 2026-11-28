@@ -33,10 +33,38 @@ def test_build_statements_for_capture_raw_in_order_with_exact_text():
         "DELETE FROM corvus.capture.raw WHERE date < DATE '2026-10-28'",
         "CALL corvus.system.rewrite_data_files('capture.raw')",
         "CALL corvus.system.expire_snapshots(table => 'capture.raw', "
-        "older_than => TIMESTAMP '2026-11-11 03:00:00', retain_last => 1)",
+        "older_than => TIMESTAMP '2026-11-11 03:00:00', retain_last => 1, stream_results => true)",
         "CALL corvus.system.remove_orphan_files(table => 'capture.raw', "
         "older_than => TIMESTAMP '2026-11-15 03:00:00', prefix_listing => true)",
     ]
+
+
+def test_table_override_replaces_global_snapshot_age():
+    table = TableConfig(name="capture.raw", retention_days=None, snapshot_max_age_days=1)
+    now = datetime(2026, 12, 1, 3, 0, tzinfo=UTC)
+
+    statements = build_statements("corvus", table, now, snapshot_max_age_days=7)
+
+    assert statements[1] == (
+        "CALL corvus.system.expire_snapshots(table => 'capture.raw', "
+        "older_than => TIMESTAMP '2026-11-30 03:00:00', retain_last => 1, stream_results => true)"
+    )
+
+
+def test_table_without_override_uses_global_snapshot_age():
+    table = TableConfig(name="capture.sessions", retention_days=None)
+
+    statements = build_statements("corvus", table, NOW, snapshot_max_age_days=7)
+
+    assert "TIMESTAMP '2026-11-11 03:00:00'" in statements[1]
+
+
+def test_expire_snapshots_streams_its_results():
+    table = TableConfig(name="capture.events", retention_days=None)
+
+    statements = build_statements("corvus", table, NOW, snapshot_max_age_days=7)
+
+    assert "stream_results => true" in statements[1]
 
 
 def test_delete_step_is_absent_when_retention_is_none():

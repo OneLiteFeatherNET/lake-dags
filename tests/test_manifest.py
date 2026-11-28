@@ -1,4 +1,7 @@
+import dataclasses
 import json
+
+import pytest
 
 from lake.config import load_config
 from lake.manifest import (
@@ -7,24 +10,30 @@ from lake.manifest import (
     build_configmap,
     build_spark_application,
     job_name,
+    pod_memory,
 )
 
 LABELS = {"app.kubernetes.io/part-of": "lake-maintenance"}
 NAME = "lake-maint-capture-raw-20261118030000"
 
 
-def _app(statements=("CALL corvus.system.rewrite_data_files('capture.raw')",)):
+def _app(statements=("CALL corvus.system.rewrite_data_files('capture.raw')",), **spark):
     config = load_config()
+    settings = dataclasses.replace(config.spark, **spark) if spark else config.spark
     return build_spark_application(
         name=NAME,
         namespace=NAMESPACE,
         catalog=config.catalog,
-        settings=config.spark,
+        settings=settings,
         config_map_name=NAME,
         table_fqn="capture.raw",
         statements_json=json.dumps(list(statements)),
         labels=LABELS,
     )
+
+
+def _container(app, pod):
+    return app["spec"][pod]["podTemplateSpec"]["spec"]["containers"][0]
 
 
 def _driver_env(app):
@@ -153,10 +162,62 @@ def test_driver_service_account_is_set_in_spark_conf_not_pod_template():
     assert "serviceAccountName" not in driver
 
 
-def test_driver_container_has_resource_limits():
-    driver = _app()["spec"]["driverSpec"]["podTemplateSpec"]["spec"]
+def test_spark_memory_conf_sets_heap_and_one_gib_overhead():
+    conf = _app()["spec"]["sparkConf"]
 
-    assert driver["containers"][0]["resources"]["limits"] == {"cpu": "1", "memory": "2Gi"}
+    assert conf["spark.driver.memory"] == "3g"
+    assert conf["spark.executor.memory"] == "3g"
+    assert conf["spark.driver.memoryOverhead"] == "1g"
+    assert conf["spark.executor.memoryOverhead"] == "1g"
+
+
+def test_driver_pod_requests_and_limits_heap_plus_overhead():
+    resources = _container(_app(), "driverSpec")["resources"]
+
+    assert resources == {
+        "requests": {"cpu": "1", "memory": "4Gi"},
+        "limits": {"cpu": "1", "memory": "4Gi"},
+    }
+
+
+def test_executor_pod_requests_and_limits_heap_plus_overhead():
+    resources = _container(_app(), "executorSpec")["resources"]
+
+    assert resources == {
+        "requests": {"cpu": "1", "memory": "4Gi"},
+        "limits": {"cpu": "1", "memory": "4Gi"},
+    }
+
+
+def test_each_pod_is_sized_from_its_own_heap_setting():
+    app = _app(driver_memory="512m", executor_memory="1g")
+
+    assert app["spec"]["sparkConf"]["spark.driver.memory"] == "512m"
+    assert app["spec"]["sparkConf"]["spark.executor.memory"] == "1g"
+    assert _container(app, "driverSpec")["resources"]["limits"]["memory"] == "1536Mi"
+    assert _container(app, "executorSpec")["resources"]["limits"]["memory"] == "2Gi"
+
+
+@pytest.mark.parametrize(
+    ("heap", "expected"),
+    [
+        ("3g", "4Gi"),
+        ("1g", "2Gi"),
+        ("10g", "11Gi"),
+        ("512m", "1536Mi"),
+        ("1024m", "2Gi"),
+        ("2048m", "3Gi"),
+        ("100m", "1124Mi"),
+    ],
+)
+def test_pod_memory_is_heap_plus_one_gib_in_whole_units(heap, expected):
+    assert pod_memory(heap) == expected
+
+
+@pytest.mark.parametrize("heap", ["", "3G", "3gb", "1.5g", "512", "0g"])
+def test_pod_memory_rejects_malformed_heap(heap):
+    with pytest.raises(ValueError, match="heap"):
+        pod_memory(heap)
 
 
 def test_py_file_points_at_mounted_job_and_args_are_catalog_table_statements():

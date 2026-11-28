@@ -31,12 +31,28 @@ SPARK_CATALOG_CLASS = "org.apache.iceberg.spark.SparkCatalog"
 JOB_VOLUME = "maintenance-job"
 DRIVER_CONTAINER = "spark-driver"
 EXECUTOR_CONTAINER = "spark-executor"
+MEMORY_OVERHEAD = "1g"
 _INVALID_LABEL_CHARS = re.compile(r"[^a-z0-9-]+")
 _MAX_LABEL = 63
+_SPARK_SIZE = re.compile(r"([1-9][0-9]*)([mg])")
 
 
 def read_job_source(path: Path = JOB_SOURCE_PATH) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def pod_memory(heap: str) -> str:
+    """Pod request and limit for a Spark heap: the heap plus MEMORY_OVERHEAD, in Gi or Mi."""
+    total = _to_mib(heap) + _to_mib(MEMORY_OVERHEAD)
+    return f"{total // 1024}Gi" if total % 1024 == 0 else f"{total}Mi"
+
+
+def _to_mib(size: str) -> int:
+    match = _SPARK_SIZE.fullmatch(size) if isinstance(size, str) else None
+    if match is None:
+        raise ValueError(f"heap must be a Spark size such as '3g' or '512m', got {size!r}")
+    amount, unit = match.groups()
+    return int(amount) * (1024 if unit == "g" else 1)
 
 
 def dns_label(value: str, max_len: int = _MAX_LABEL) -> str:
@@ -87,6 +103,7 @@ def build_spark_application(
                     settings,
                     config_map_name,
                     DRIVER_CONTAINER,
+                    memory=settings.driver_memory,
                     with_oauth=True,
                 )
             },
@@ -95,6 +112,7 @@ def build_spark_application(
                     settings,
                     config_map_name,
                     EXECUTOR_CONTAINER,
+                    memory=settings.executor_memory,
                     with_oauth=False,
                 )
             },
@@ -118,6 +136,10 @@ def _spark_conf(catalog: str, settings: SparkSettings) -> dict[str, str]:
         "spark.kubernetes.authenticate.driver.serviceAccountName": DRIVER_SERVICE_ACCOUNT,
         "spark.kubernetes.driver.podTemplateContainerName": DRIVER_CONTAINER,
         "spark.kubernetes.executor.podTemplateContainerName": EXECUTOR_CONTAINER,
+        "spark.driver.memory": settings.driver_memory,
+        "spark.executor.memory": settings.executor_memory,
+        "spark.driver.memoryOverhead": MEMORY_OVERHEAD,
+        "spark.executor.memoryOverhead": MEMORY_OVERHEAD,
         "spark.jars.packages": f"{settings.iceberg_runtime},{settings.iceberg_aws_bundle}",
         # The image runs as user spark with HOME=/nonexistent; Ivy would put its cache there and
         # spark-submit fails with FileNotFoundException before the job starts.
@@ -142,6 +164,7 @@ def _pod_template(
     config_map_name: str,
     container_name: str,
     *,
+    memory: str,
     with_oauth: bool,
 ) -> dict[str, Any]:
     env = [
@@ -154,7 +177,7 @@ def _pod_template(
             _secret_env("CLIENT_SECRET", OAUTH_SECRET, "client_secret"),
             *env,
         ]
-    resources = {"cpu": "1", "memory": "2Gi"}
+    resources = {"cpu": "1", "memory": pod_memory(memory)}
     spec: dict[str, Any] = {
         "containers": [
             {

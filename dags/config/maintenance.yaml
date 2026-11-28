@@ -7,15 +7,22 @@ spark:
   image: apache/spark:4.1.4-scala2.13-java17-python3-ubuntu
   iceberg_runtime: org.apache.iceberg:iceberg-spark-runtime-4.1_2.13:1.12.0
   iceberg_aws_bundle: org.apache.iceberg:iceberg-aws-bundle:1.12.0
+  # Heap of the maintenance driver and each executor; the pods get 1 GiB more for overhead.
+  driver_memory: 3g
+  executor_memory: 3g
 tables:
   # Raw packets are kept permanently (maintainer decision 2026-11-18, reviewed yearly); rows only
   # leave through GDPR erasure, which Corvus performs as Iceberg row deletes.
+  # One day: Corvus commits every ~100 s; reproducible datasets are pinned by tags.
   - name: capture.raw
     retention_days: null
     day_column: date
+    snapshot_max_age_days: 1
+  # One day: Corvus commits every ~100 s; reproducible datasets are pinned by tags.
   - name: capture.events
     retention_days: null
     day_column: date
+    snapshot_max_age_days: 1
   # Corvus session metadata: kept as long as the raw capture; erasure is an Iceberg row delete by Corvus.
   - name: capture.sessions
     retention_days: null
