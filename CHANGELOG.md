@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.2.0](https://github.com/OneLiteFeatherNET/lake-dags/compare/v0.1.0...v0.2.0) (2026-11-28)
+
+
+### Features
+
+* **dags:** add label, feature, erasure and reference statements ([#33](https://github.com/OneLiteFeatherNET/lake-dags/issues/33)) ([fb52385](https://github.com/OneLiteFeatherNET/lake-dags/commit/fb52385813071734ec38510746ba2bd4508be5a7))
+* **dags:** add layer config, quality checks and packet decoder ([#31](https://github.com/OneLiteFeatherNET/lake-dags/issues/31)) ([579be1f](https://github.com/OneLiteFeatherNET/lake-dags/commit/579be1fa88eb6eca9621df3c7d3ceec37f6330b6))
+* **dags:** add refined layer statements and player split ([#32](https://github.com/OneLiteFeatherNET/lake-dags/issues/32)) ([23a86b9](https://github.com/OneLiteFeatherNET/lake-dags/commit/23a86b92b6d797c110842a40169226d9f4f4eaa5))
+* **dags:** declare lake tables as airflow assets ([#34](https://github.com/OneLiteFeatherNET/lake-dags/issues/34)) ([1415abb](https://github.com/OneLiteFeatherNET/lake-dags/commit/1415abbcbdfbdc8496e512f782abe9c6650ed1cc))
+
+
+### Bug Fixes
+
+* **dags:** maintain all corvus capture tables ([#26](https://github.com/OneLiteFeatherNET/lake-dags/issues/26)) ([a6a6e75](https://github.com/OneLiteFeatherNET/lake-dags/commit/a6a6e75d37d38e30ed9b9e886682e8b8474d340e))
+* **dags:** run iceberg maintenance one table at a time ([#28](https://github.com/OneLiteFeatherNET/lake-dags/issues/28)) ([524dc33](https://github.com/OneLiteFeatherNET/lake-dags/commit/524dc3398e90c098452705ac45ba25d26fbd83ce))
+* **dags:** size maintenance spark jobs for large tables ([#37](https://github.com/OneLiteFeatherNET/lake-dags/issues/37)) ([7d2135f](https://github.com/OneLiteFeatherNET/lake-dags/commit/7d2135f158003565296d543a5ceddbaabc0384e9))
+
 ## 0.1.0 (2026-11-18)
 
 
