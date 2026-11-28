@@ -35,10 +35,14 @@ def build_statements(
             f"DELETE FROM {catalog}.{name} WHERE {table.day_column} < DATE '{cutoff.isoformat()}'"
         )
     statements.append(f"CALL {catalog}.system.rewrite_data_files('{name}')")
-    expire_before = utc_now - timedelta(days=snapshot_max_age_days)
+    max_age_days = table.snapshot_max_age_days
+    if max_age_days is None:
+        max_age_days = snapshot_max_age_days
+    expire_before = utc_now - timedelta(days=max_age_days)
     statements.append(
         f"CALL {catalog}.system.expire_snapshots(table => '{name}', "
-        f"older_than => TIMESTAMP '{expire_before.strftime(_TIMESTAMP_FORMAT)}', retain_last => 1)"
+        f"older_than => TIMESTAMP '{expire_before.strftime(_TIMESTAMP_FORMAT)}', "
+        "retain_last => 1, stream_results => true)"
     )
     orphan_before = utc_now - timedelta(days=ORPHAN_AGE_DAYS)
     statements.append(

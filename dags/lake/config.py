@@ -13,8 +13,17 @@ CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "maintenance.yaml
 
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _TOP_KEYS = {"catalog", "snapshot_max_age_days", "spark", "tables"}
-_SPARK_KEYS = {"spark_version", "image", "iceberg_runtime", "iceberg_aws_bundle"}
-_TABLE_KEYS = {"name", "retention_days", "day_column"}
+_SPARK_KEYS = {
+    "spark_version",
+    "image",
+    "iceberg_runtime",
+    "iceberg_aws_bundle",
+    "driver_memory",
+    "executor_memory",
+}
+_MEMORY_KEYS = ("driver_memory", "executor_memory")
+_SPARK_SIZE = re.compile(r"[1-9][0-9]*[mg]")
+_TABLE_KEYS = {"name", "retention_days", "day_column", "snapshot_max_age_days"}
 
 
 @dataclass(frozen=True)
@@ -23,6 +32,8 @@ class SparkSettings:
     image: str
     iceberg_runtime: str
     iceberg_aws_bundle: str
+    driver_memory: str
+    executor_memory: str
 
 
 @dataclass(frozen=True)
@@ -30,6 +41,7 @@ class TableConfig:
     name: str
     retention_days: int | None
     day_column: str = "date"
+    snapshot_max_age_days: int | None = None
 
 
 @dataclass(frozen=True)
@@ -69,8 +81,17 @@ def _parse_spark(raw: Any) -> SparkSettings:
     values = {
         key: _non_empty_str(_required(section, key, "config.spark"), f"config.spark.{key}")
         for key in _SPARK_KEYS
+        if key not in _MEMORY_KEYS
     }
+    for key in _MEMORY_KEYS:
+        values[key] = _spark_size(_required(section, key, "config.spark"), f"config.spark.{key}")
     return SparkSettings(**values)
+
+
+def _spark_size(value: Any, where: str) -> str:
+    if not isinstance(value, str) or not _SPARK_SIZE.fullmatch(value):
+        raise ValueError(f"{where} must be a Spark size such as '3g' or '512m', got {value!r}")
+    return value
 
 
 def _parse_tables(raw: Any) -> list[TableConfig]:
@@ -90,7 +111,17 @@ def _parse_tables(raw: Any) -> list[TableConfig]:
         if retention is not None:
             retention = _positive_int(retention, f"{where}.retention_days")
         day_column = _identifier(section.get("day_column", "date"), f"{where}.day_column")
-        tables.append(TableConfig(name=name, retention_days=retention, day_column=day_column))
+        snapshot_age = section.get("snapshot_max_age_days")
+        if snapshot_age is not None:
+            snapshot_age = _positive_int(snapshot_age, f"{where}.snapshot_max_age_days")
+        tables.append(
+            TableConfig(
+                name=name,
+                retention_days=retention,
+                day_column=day_column,
+                snapshot_max_age_days=snapshot_age,
+            )
+        )
     return tables
 
 
